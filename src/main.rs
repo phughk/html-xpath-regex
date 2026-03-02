@@ -76,6 +76,49 @@ impl HtmlRegexXpathTool {
 
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
+
+    #[tool(description = "Evaluates an XPath expression against an HTML or XML file and returns the matching content")]
+    pub fn evaluate_xpath(
+        &self,
+        Parameters(EvaluateXPathRequest { file, xpath }): Parameters<EvaluateXPathRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let file_path = Path::new(&file);
+        if !file_path.exists() {
+            return Err(ErrorData::new(
+                ErrorCode::INVALID_REQUEST,
+                format!("File not found: {file}"),
+                None,
+            ));
+        }
+
+        let root = parsing::parse_file(file_path).map_err(|e| {
+            ErrorData::new(ErrorCode::INTERNAL_ERROR, e, None)
+        })?;
+
+        let results = xpath::evaluate_xpath(&root, &xpath).map_err(|e| {
+            ErrorData::new(
+                ErrorCode::INVALID_REQUEST,
+                format!("Invalid XPath expression: {e}"),
+                None,
+            )
+        })?;
+
+        let response = EvaluateXPathResponse {
+            file,
+            xpath,
+            results,
+        };
+
+        let json = serde_json::to_string_pretty(&response).map_err(|e| {
+            ErrorData::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to serialize response: {e}"),
+                None,
+            )
+        })?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -84,6 +127,21 @@ pub struct XPathForRegexRequest {
     pub file: String,
     #[schemars(description = "The regex to search, and the results will be translated back to xpaths")]
     pub regex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct EvaluateXPathRequest {
+    #[schemars(description = "The html or xml file to read")]
+    pub file: String,
+    #[schemars(description = "The XPath expression to evaluate")]
+    pub xpath: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvaluateXPathResponse {
+    pub file: String,
+    pub xpath: String,
+    pub results: Vec<String>,
 }
 
 #[tool_handler]

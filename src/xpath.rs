@@ -125,37 +125,158 @@ fn generate_xpath(root: &SimpleNode, path_indices: &[usize]) -> String {
     xpath
 }
 
+/// Evaluate an XPath expression against a SimpleNode tree and return matching text content.
+pub fn evaluate_xpath(root: &SimpleNode, xpath: &str) -> Result<Vec<String>, String> {
+    let steps = parse_xpath(xpath)?;
+    let mut current_nodes = vec![root];
+
+    for step in &steps {
+        let mut next_nodes = Vec::new();
+        for node in &current_nodes {
+            match step {
+                XPathStep::Child { name, position } => {
+                    let matching: Vec<&SimpleNode> = node
+                        .children
+                        .iter()
+                        .filter(|c| {
+                            matches!(&c.kind, NodeKind::Element { local_name, .. } if local_name == name)
+                        })
+                        .collect();
+                    if let Some(pos) = position {
+                        if let Some(child) = matching.get(pos - 1) {
+                            next_nodes.push(*child);
+                        }
+                    } else {
+                        next_nodes.extend(matching);
+                    }
+                }
+                XPathStep::Text { position } => {
+                    let text_children: Vec<&SimpleNode> = node
+                        .children
+                        .iter()
+                        .filter(|c| matches!(&c.kind, NodeKind::Text(t) if !t.trim().is_empty()))
+                        .collect();
+                    if let Some(pos) = position {
+                        if let Some(child) = text_children.get(pos - 1) {
+                            next_nodes.push(*child);
+                        }
+                    } else {
+                        next_nodes.extend(text_children);
+                    }
+                }
+                XPathStep::DescendantById { id } => {
+                    let mut found = Vec::new();
+                    find_by_id(root, id, &mut found);
+                    next_nodes.extend(found);
+                }
+            }
+        }
+        current_nodes = next_nodes;
+    }
+
+    Ok(current_nodes
+        .into_iter()
+        .map(|n| collect_text(n))
+        .filter(|t| !t.is_empty())
+        .collect())
+}
+
+fn collect_text(node: &SimpleNode) -> String {
+    match &node.kind {
+        NodeKind::Text(t) => t.clone(),
+        NodeKind::Document | NodeKind::Element { .. } => {
+            node.children.iter().map(collect_text).collect::<Vec<_>>().join("")
+        }
+    }
+}
+
+fn find_by_id<'a>(node: &'a SimpleNode, target_id: &str, results: &mut Vec<&'a SimpleNode>) {
+    if let NodeKind::Element { attributes, .. } = &node.kind {
+        if attributes.iter().any(|(k, v)| k == "id" && v == target_id) {
+            results.push(node);
+            return;
+        }
+    }
+    for child in &node.children {
+        find_by_id(child, target_id, results);
+    }
+}
+
+#[derive(Debug)]
+enum XPathStep {
+    Child { name: String, position: Option<usize> },
+    Text { position: Option<usize> },
+    DescendantById { id: String },
+}
+
+fn parse_xpath(xpath: &str) -> Result<Vec<XPathStep>, String> {
+    let mut steps = Vec::new();
+    let xpath = xpath.trim();
+
+    if xpath.is_empty() {
+        return Err("Empty XPath expression".to_string());
+    }
+
+    // Handle //*[@id='...'] prefix
+    if xpath.starts_with("//*[@id='") {
+        let rest = &xpath[9..]; // after //*[@id='
+        let end = rest.find("']").ok_or("Malformed id selector")?;
+        let id = &rest[..end];
+        steps.push(XPathStep::DescendantById { id: id.to_string() });
+        let remaining = &rest[end + 2..]; // after ']
+        if remaining.is_empty() {
+            return Ok(steps);
+        }
+        // Parse remaining steps after the id selector
+        return parse_path_steps(remaining, &mut steps).map(|()| steps);
+    }
+
+    // Regular absolute path
+    if !xpath.starts_with('/') {
+        return Err(format!("XPath must start with '/' or '//*', got: {xpath}"));
+    }
+
+    parse_path_steps(xpath, &mut steps)?;
+    Ok(steps)
+}
+
+fn parse_path_steps(path: &str, steps: &mut Vec<XPathStep>) -> Result<(), String> {
+    // Split by '/' but skip leading empty segment
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+
+    for seg in segments {
+        if seg.starts_with("text()") {
+            // text() or text()[n]
+            let position = if seg.contains('[') {
+                let start = seg.find('[').unwrap() + 1;
+                let end = seg.find(']').ok_or("Malformed text() position")?;
+                Some(seg[start..end].parse::<usize>().map_err(|e| format!("Invalid position: {e}"))?)
+            } else {
+                None
+            };
+            steps.push(XPathStep::Text { position });
+        } else {
+            // element or element[n]
+            let (name, position) = if let Some(bracket_pos) = seg.find('[') {
+                let name = &seg[..bracket_pos];
+                let end = seg.find(']').ok_or("Malformed element position")?;
+                let pos = seg[bracket_pos + 1..end]
+                    .parse::<usize>()
+                    .map_err(|e| format!("Invalid position: {e}"))?;
+                (name.to_string(), Some(pos))
+            } else {
+                (seg.to_string(), None)
+            };
+            steps.push(XPathStep::Child { name, position });
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{NodeKind, SimpleNode};
-
-    fn text_node(s: &str) -> SimpleNode {
-        SimpleNode {
-            kind: NodeKind::Text(s.to_string()),
-            children: vec![],
-        }
-    }
-
-    fn element(name: &str, attrs: Vec<(&str, &str)>, children: Vec<SimpleNode>) -> SimpleNode {
-        SimpleNode {
-            kind: NodeKind::Element {
-                local_name: name.to_string(),
-                attributes: attrs
-                    .into_iter()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .collect(),
-            },
-            children,
-        }
-    }
-
-    fn doc(children: Vec<SimpleNode>) -> SimpleNode {
-        SimpleNode {
-            kind: NodeKind::Document,
-            children,
-        }
-    }
 
     #[test]
     fn test_simple_xpath() {
@@ -223,5 +344,53 @@ mod tests {
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].regex_matches, vec!["foo", "foo", "foo"]);
         assert_eq!(matches[0].xpath, "/p/text()");
+    }
+
+    // evaluate_xpath tests
+
+    #[test]
+    fn test_evaluate_simple_path() {
+        let tree = crate::parsing::parse_html("<html><body><p>Hello World</p></body></html>");
+        let results = evaluate_xpath(&tree, "/html/body/p/text()").unwrap();
+        assert_eq!(results, vec!["Hello World"]);
+    }
+
+    #[test]
+    fn test_evaluate_positional() {
+        let tree = crate::parsing::parse_xml("<root><div>First</div><div>Second</div></root>").unwrap();
+        let results = evaluate_xpath(&tree, "/root/div[2]/text()").unwrap();
+        assert_eq!(results, vec!["Second"]);
+    }
+
+    #[test]
+    fn test_evaluate_by_id() {
+        let tree = crate::parsing::parse_xml(r#"<root><div id="main"><p>Target</p></div></root>"#).unwrap();
+        let results = evaluate_xpath(&tree, "//*[@id='main']/p/text()").unwrap();
+        assert_eq!(results, vec!["Target"]);
+    }
+
+    #[test]
+    fn test_evaluate_element_collects_all_text() {
+        let tree = crate::parsing::parse_xml(r#"<root><div>Hello <b>World</b></div></root>"#).unwrap();
+        let results = evaluate_xpath(&tree, "/root/div").unwrap();
+        assert_eq!(results, vec!["Hello World"]);
+    }
+
+    #[test]
+    fn test_evaluate_no_match() {
+        let tree = crate::parsing::parse_xml("<root><item>Text</item></root>").unwrap();
+        let results = evaluate_xpath(&tree, "/root/missing/text()").unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_roundtrip_regex_then_evaluate() {
+        let tree = crate::parsing::parse_xml(r#"<root><a>One</a><b>Two</b><a>Three</a></root>"#).unwrap();
+        let regex = Regex::new("Three").unwrap();
+        let matches = xpath_for_regex(&tree, &regex);
+        assert_eq!(matches.len(), 1);
+
+        let results = evaluate_xpath(&tree, &matches[0].xpath).unwrap();
+        assert_eq!(results, vec!["Three"]);
     }
 }
