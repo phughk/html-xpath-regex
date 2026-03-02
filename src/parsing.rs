@@ -37,7 +37,9 @@ pub fn parse_file(path: &Path) -> Result<SimpleNode, String> {
 
 pub(crate) fn parse_html(content: &str) -> SimpleNode {
     let document = scraper::Html::parse_document(content);
-    convert_html_node(document.tree.root())
+    let mut root = convert_html_node(document.tree.root());
+    assign_html_offsets(&mut root, content, &mut 0);
+    root
 }
 
 fn convert_html_node(node_ref: ego_tree::NodeRef<scraper::Node>) -> SimpleNode {
@@ -56,7 +58,42 @@ fn convert_html_node(node_ref: ego_tree::NodeRef<scraper::Node>) -> SimpleNode {
 
     let children: Vec<SimpleNode> = node_ref.children().map(convert_html_node).collect();
 
-    SimpleNode { kind, children }
+    SimpleNode {
+        kind,
+        children,
+        source_offset: None,
+    }
+}
+
+/// Post-process HTML tree to assign byte offsets by scanning the raw content.
+/// This is approximate for HTML with decoded entities.
+fn assign_html_offsets(node: &mut SimpleNode, content: &str, cursor: &mut usize) {
+    match &node.kind {
+        NodeKind::Text(text) => {
+            let search_text = text.trim();
+            if !search_text.is_empty() {
+                if let Some(pos) = content[*cursor..].find(search_text) {
+                    node.source_offset = Some(*cursor + pos);
+                    *cursor += pos + search_text.len();
+                }
+            }
+        }
+        NodeKind::Element { local_name, .. } => {
+            // Find the opening tag in the raw content
+            let tag_pattern = format!("<{}", local_name);
+            if let Some(pos) = content[*cursor..].find(&tag_pattern) {
+                node.source_offset = Some(*cursor + pos);
+            }
+            for child in &mut node.children {
+                assign_html_offsets(child, content, cursor);
+            }
+        }
+        NodeKind::Document => {
+            for child in &mut node.children {
+                assign_html_offsets(child, content, cursor);
+            }
+        }
+    }
 }
 
 pub(crate) fn parse_xml(content: &str) -> Result<SimpleNode, String> {
@@ -80,9 +117,14 @@ fn convert_xml_node(node: &roxmltree::Node) -> SimpleNode {
         _ => NodeKind::Text(String::new()),
     };
 
+    let source_offset = Some(node.range().start);
     let children: Vec<SimpleNode> = node.children().map(|c| convert_xml_node(&c)).collect();
 
-    SimpleNode { kind, children }
+    SimpleNode {
+        kind,
+        children,
+        source_offset,
+    }
 }
 
 #[cfg(test)]

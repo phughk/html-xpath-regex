@@ -11,7 +11,7 @@ use rmcp::transport::stdio;
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler, ServiceExt};
 use serde::{Deserialize, Serialize};
 
-use crate::types::XPathForRegexResponse;
+use crate::types::{EvaluateXPathResult, XPathForRegexResponse};
 
 #[tokio::main]
 async fn main() {
@@ -141,7 +141,7 @@ pub struct EvaluateXPathRequest {
 pub struct EvaluateXPathResponse {
     pub file: String,
     pub xpath: String,
-    pub results: Vec<String>,
+    pub results: Vec<EvaluateXPathResult>,
 }
 
 #[tool_handler]

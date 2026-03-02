@@ -1,6 +1,6 @@
 use regex::Regex;
 
-use crate::types::{NodeKind, SimpleNode, XPathMatch};
+use crate::types::{EvaluateXPathResult, NodeKind, SimpleNode, XPathMatch};
 
 /// Find all text nodes matching the regex and return their XPath expressions.
 pub fn xpath_for_regex(root: &SimpleNode, regex: &Regex) -> Vec<XPathMatch> {
@@ -9,12 +9,17 @@ pub fn xpath_for_regex(root: &SimpleNode, regex: &Regex) -> Vec<XPathMatch> {
     find_matches(root, regex, &mut path, &mut results);
     results
         .into_iter()
-        .map(|DfsWalkResult{path_indices, matched_full_text, regex_match_strings}| {
+        .map(|DfsWalkResult{path_indices, matched_full_text, regex_match_strings, source_offset, match_byte_offsets}| {
             let xpath = generate_xpath(root, &path_indices);
+            let file_offsets = match source_offset {
+                Some(base) => match_byte_offsets.into_iter().map(|off| base + off).collect(),
+                None => match_byte_offsets,
+            };
             XPathMatch {
                 xpath,
                 matched_text: matched_full_text,
                 regex_matches: regex_match_strings,
+                file_offsets,
             }
         })
         .collect()
@@ -24,6 +29,9 @@ struct DfsWalkResult {
     path_indices: Vec<usize>,
     matched_full_text: String,
     regex_match_strings: Vec<String>,
+    source_offset: Option<usize>,
+    /// Byte offsets of each regex match within the text node.
+    match_byte_offsets: Vec<usize>,
 }
 
 /// DFS walk to find text nodes matching the regex.
@@ -38,12 +46,17 @@ fn find_matches(
         NodeKind::Text(text) => {
             let trimmed = text.trim();
             if !trimmed.is_empty() {
-                let matches: Vec<String> = regex
-                    .find_iter(text)
-                    .map(|m| m.as_str().to_string())
-                    .collect();
-                if !matches.is_empty() {
-                    results.push(DfsWalkResult{path_indices: path.clone(), matched_full_text: text.clone(), regex_match_strings: matches});
+                let regex_matches: Vec<regex::Match> = regex.find_iter(text).collect();
+                if !regex_matches.is_empty() {
+                    let match_byte_offsets: Vec<usize> = regex_matches.iter().map(|m| m.start()).collect();
+                    let regex_match_strings: Vec<String> = regex_matches.iter().map(|m| m.as_str().to_string()).collect();
+                    results.push(DfsWalkResult{
+                        path_indices: path.clone(),
+                        matched_full_text: text.clone(),
+                        regex_match_strings,
+                        source_offset: node.source_offset,
+                        match_byte_offsets,
+                    });
                 }
             }
         }
@@ -125,8 +138,8 @@ fn generate_xpath(root: &SimpleNode, path_indices: &[usize]) -> String {
     xpath
 }
 
-/// Evaluate an XPath expression against a SimpleNode tree and return matching text content.
-pub fn evaluate_xpath(root: &SimpleNode, xpath: &str) -> Result<Vec<String>, String> {
+/// Evaluate an XPath expression against a SimpleNode tree and return matching text content with file offsets.
+pub fn evaluate_xpath(root: &SimpleNode, xpath: &str) -> Result<Vec<EvaluateXPathResult>, String> {
     let steps = parse_xpath(xpath)?;
     let mut current_nodes = vec![root];
 
@@ -176,8 +189,12 @@ pub fn evaluate_xpath(root: &SimpleNode, xpath: &str) -> Result<Vec<String>, Str
 
     Ok(current_nodes
         .into_iter()
-        .map(|n| collect_text(n))
-        .filter(|t| !t.is_empty())
+        .map(|n| {
+            let text = collect_text(n);
+            let file_offset = n.source_offset;
+            EvaluateXPathResult { text, file_offset }
+        })
+        .filter(|r| !r.text.is_empty())
         .collect())
 }
 
@@ -289,6 +306,7 @@ mod tests {
         assert_eq!(matches[0].xpath, "/html/body/p/text()");
         assert_eq!(matches[0].matched_text, "Hello World");
         assert_eq!(matches[0].regex_matches, vec!["Hello"]);
+        assert_eq!(matches[0].file_offsets.len(), 1);
     }
 
     #[test]
@@ -300,6 +318,8 @@ mod tests {
 
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].xpath, "/root/div[2]/text()");
+        // "Second" starts at byte offset 22 in "<root><div>First</div><div>Second</div></root>"
+        assert_eq!(matches[0].file_offsets, vec![27]);
     }
 
     #[test]
@@ -344,6 +364,9 @@ mod tests {
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].regex_matches, vec!["foo", "foo", "foo"]);
         assert_eq!(matches[0].xpath, "/p/text()");
+        // "foo bar foo baz foo" starts at byte 3 in "<p>foo bar foo baz foo</p>"
+        // Regex matches at offsets 0, 8, 16 within the text
+        assert_eq!(matches[0].file_offsets, vec![3, 11, 19]);
     }
 
     // evaluate_xpath tests
@@ -352,28 +375,34 @@ mod tests {
     fn test_evaluate_simple_path() {
         let tree = crate::parsing::parse_html("<html><body><p>Hello World</p></body></html>");
         let results = evaluate_xpath(&tree, "/html/body/p/text()").unwrap();
-        assert_eq!(results, vec!["Hello World"]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].text, "Hello World");
+        assert!(results[0].file_offset.is_some());
     }
 
     #[test]
     fn test_evaluate_positional() {
         let tree = crate::parsing::parse_xml("<root><div>First</div><div>Second</div></root>").unwrap();
         let results = evaluate_xpath(&tree, "/root/div[2]/text()").unwrap();
-        assert_eq!(results, vec!["Second"]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].text, "Second");
+        assert_eq!(results[0].file_offset, Some(27));
     }
 
     #[test]
     fn test_evaluate_by_id() {
         let tree = crate::parsing::parse_xml(r#"<root><div id="main"><p>Target</p></div></root>"#).unwrap();
         let results = evaluate_xpath(&tree, "//*[@id='main']/p/text()").unwrap();
-        assert_eq!(results, vec!["Target"]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].text, "Target");
     }
 
     #[test]
     fn test_evaluate_element_collects_all_text() {
         let tree = crate::parsing::parse_xml(r#"<root><div>Hello <b>World</b></div></root>"#).unwrap();
         let results = evaluate_xpath(&tree, "/root/div").unwrap();
-        assert_eq!(results, vec!["Hello World"]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].text, "Hello World");
     }
 
     #[test]
@@ -391,6 +420,8 @@ mod tests {
         assert_eq!(matches.len(), 1);
 
         let results = evaluate_xpath(&tree, &matches[0].xpath).unwrap();
-        assert_eq!(results, vec!["Three"]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].text, "Three");
+        assert!(results[0].file_offset.is_some());
     }
 }
