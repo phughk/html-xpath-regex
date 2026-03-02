@@ -24,8 +24,7 @@ pub fn detect_format(path: &Path, content: &str) -> FileFormat {
 }
 
 pub fn parse_file(path: &Path) -> Result<SimpleNode, String> {
-    let content =
-        std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {e}"))?;
+    let content = std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {e}"))?;
 
     let format = detect_format(path, &content);
 
@@ -61,7 +60,7 @@ fn convert_html_node(node_ref: ego_tree::NodeRef<scraper::Node>) -> SimpleNode {
     SimpleNode {
         kind,
         children,
-        source_offset: None,
+        source_offset: 0,
     }
 }
 
@@ -73,7 +72,7 @@ fn assign_html_offsets(node: &mut SimpleNode, content: &str, cursor: &mut usize)
             let search_text = text.trim();
             if !search_text.is_empty() {
                 if let Some(pos) = content[*cursor..].find(search_text) {
-                    node.source_offset = Some(*cursor + pos);
+                    node.source_offset = *cursor + pos;
                     *cursor += pos + search_text.len();
                 }
             }
@@ -82,7 +81,7 @@ fn assign_html_offsets(node: &mut SimpleNode, content: &str, cursor: &mut usize)
             // Find the opening tag in the raw content
             let tag_pattern = format!("<{}", local_name);
             if let Some(pos) = content[*cursor..].find(&tag_pattern) {
-                node.source_offset = Some(*cursor + pos);
+                node.source_offset = *cursor + pos;
             }
             for child in &mut node.children {
                 assign_html_offsets(child, content, cursor);

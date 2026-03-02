@@ -19,13 +19,10 @@ pub fn css_selector_for_regex(root: &SimpleNode, regex: &Regex) -> Vec<CssSelect
                  match_byte_offsets,
              }| {
                 let selector = generate_css_selector(root, &path_indices);
-                let file_offsets = match source_offset {
-                    Some(base) => match_byte_offsets
-                        .into_iter()
-                        .map(|off| base + off)
-                        .collect(),
-                    None => match_byte_offsets,
-                };
+                let file_offsets = match_byte_offsets
+                    .into_iter()
+                    .map(|off| source_offset + off)
+                    .collect();
                 CssSelectorMatch {
                     selector,
                     matched_text: matched_full_text,
@@ -146,8 +143,10 @@ pub fn evaluate_css_selector(
         .into_iter()
         .map(|n| {
             let text = collect_text(n);
-            let file_offset = n.source_offset;
-            EvaluateXPathResult { text, file_offset }
+            EvaluateXPathResult {
+                text,
+                file_offset: n.source_offset,
+            }
         })
         .filter(|r| !r.text.is_empty())
         .collect())
@@ -180,9 +179,9 @@ fn find_by_id<'a>(node: &'a SimpleNode, target_id: &str, results: &mut Vec<&'a S
 fn find_by_class<'a>(node: &'a SimpleNode, target_class: &str, results: &mut Vec<&'a SimpleNode>) {
     for child in &node.children {
         if let NodeKind::Element { attributes, .. } = &child.kind {
-            let has_class = attributes.iter().any(|(k, v)| {
-                k == "class" && v.split_whitespace().any(|c| c == target_class)
-            });
+            let has_class = attributes
+                .iter()
+                .any(|(k, v)| k == "class" && v.split_whitespace().any(|c| c == target_class));
             if has_class {
                 results.push(child);
             }
@@ -199,9 +198,9 @@ fn find_by_attribute<'a>(
 ) {
     for child in &node.children {
         if let NodeKind::Element { attributes, .. } = &child.kind {
-            let matches = attributes.iter().any(|(k, v)| {
-                k == attr_name && attr_value.map_or(true, |val| v == val)
-            });
+            let matches = attributes
+                .iter()
+                .any(|(k, v)| k == attr_name && attr_value.map_or(true, |val| v == val));
             if matches {
                 results.push(child);
             }
@@ -344,10 +343,8 @@ mod tests {
 
     #[test]
     fn test_id_shortcut() {
-        let tree = crate::parsing::parse_xml(
-            r#"<root><div id="main"><p>Target</p></div></root>"#,
-        )
-        .unwrap();
+        let tree = crate::parsing::parse_xml(r#"<root><div id="main"><p>Target</p></div></root>"#)
+            .unwrap();
 
         let regex = Regex::new("Target").unwrap();
         let matches = css_selector_for_regex(&tree, &regex);
@@ -402,10 +399,8 @@ mod tests {
 
     #[test]
     fn test_evaluate_by_id() {
-        let tree = crate::parsing::parse_xml(
-            r#"<root><div id="main"><p>Target</p></div></root>"#,
-        )
-        .unwrap();
+        let tree = crate::parsing::parse_xml(r#"<root><div id="main"><p>Target</p></div></root>"#)
+            .unwrap();
         let results = evaluate_css_selector(&tree, "#main > p").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].text, "Target");
@@ -430,8 +425,7 @@ mod tests {
     #[test]
     fn test_roundtrip_css_then_evaluate() {
         let tree =
-            crate::parsing::parse_xml(r#"<root><a>One</a><b>Two</b><a>Three</a></root>"#)
-                .unwrap();
+            crate::parsing::parse_xml(r#"<root><a>One</a><b>Two</b><a>Three</a></root>"#).unwrap();
         let regex = Regex::new("Three").unwrap();
         let matches = css_selector_for_regex(&tree, &regex);
         assert_eq!(matches.len(), 1);
@@ -445,10 +439,9 @@ mod tests {
 
     #[test]
     fn test_evaluate_by_class() {
-        let tree = crate::parsing::parse_xml(
-            r#"<root><div class="container"><p>Inside</p></div></root>"#,
-        )
-        .unwrap();
+        let tree =
+            crate::parsing::parse_xml(r#"<root><div class="container"><p>Inside</p></div></root>"#)
+                .unwrap();
         let results = evaluate_css_selector(&tree, ".container > p").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].text, "Inside");
@@ -458,10 +451,7 @@ mod tests {
     fn test_file_offsets_xml_integration() {
         use std::io::Write;
         let content = "<root><div>First</div><div>Second</div></root>";
-        let mut tmp = tempfile::Builder::new()
-            .suffix(".xml")
-            .tempfile()
-            .unwrap();
+        let mut tmp = tempfile::Builder::new().suffix(".xml").tempfile().unwrap();
         tmp.write_all(content.as_bytes()).unwrap();
         tmp.flush().unwrap();
 
@@ -481,10 +471,7 @@ mod tests {
     fn test_file_offsets_html_integration() {
         use std::io::Write;
         let content = "<html><body><p>Hello World</p></body></html>";
-        let mut tmp = tempfile::Builder::new()
-            .suffix(".html")
-            .tempfile()
-            .unwrap();
+        let mut tmp = tempfile::Builder::new().suffix(".html").tempfile().unwrap();
         tmp.write_all(content.as_bytes()).unwrap();
         tmp.flush().unwrap();
 

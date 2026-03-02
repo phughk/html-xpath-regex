@@ -6,7 +6,7 @@ pub struct SimpleNode {
     pub kind: NodeKind,
     pub children: Vec<SimpleNode>,
     /// Byte offset of this node's content in the original source file.
-    pub source_offset: Option<usize>,
+    pub source_offset: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -32,7 +32,7 @@ pub struct XPathMatch {
 pub struct EvaluateXPathResult {
     pub text: String,
     /// Byte offset from the beginning of the file.
-    pub file_offset: Option<usize>,
+    pub file_offset: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
