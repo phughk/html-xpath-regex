@@ -5,6 +5,7 @@ pub(crate) mod xpath;
 
 use std::path::Path;
 
+use clap::{Parser, Subcommand};
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content, ErrorCode, ServerCapabilities, ServerInfo};
@@ -14,10 +15,79 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{CssSelectorForRegexResponse, EvaluateXPathResult, XPathForRegexResponse};
 
+#[derive(Parser)]
+#[command(name = "html-xpath-regex")]
+#[command(about = "Provides regex to xpath/CSS selector translation for xml and html documents")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    #[command(name = "mcp")]
+    #[command(about = "Run in MCP mode (stdio transport)")]
+    Mcp,
+    
+    #[command(name = "xpath-for-regex")]
+    #[command(about = "Find xpaths for strings matching a regex")]
+    XPathForRegex {
+        #[arg(name = "file")]
+        file: String,
+        #[arg(name = "regex")]
+        regex: String,
+    },
+    
+    #[command(name = "evaluate-xpath")]
+    #[command(about = "Evaluate an XPath expression")]
+    EvaluateXPath {
+        #[arg(name = "file")]
+        file: String,
+        #[arg(name = "xpath")]
+        xpath: String,
+    },
+    
+    #[command(name = "css-for-regex")]
+    #[command(about = "Find CSS selectors for strings matching a regex")]
+    CssForRegex {
+        #[arg(name = "file")]
+        file: String,
+        #[arg(name = "regex")]
+        regex: String,
+    },
+    
+    #[command(name = "evaluate-css")]
+    #[command(about = "Evaluate a CSS selector")]
+    EvaluateCss {
+        #[arg(name = "file")]
+        file: String,
+        #[arg(name = "selector")]
+        selector: String,
+    },
+}
+
 #[tokio::main]
 async fn main() {
-    let service = HtmlRegexXpathTool::new().serve(stdio()).await.unwrap();
-    service.waiting().await.unwrap();
+    let cli = Cli::parse();
+    
+    match cli.command {
+        Commands::Mcp => {
+            let service = HtmlRegexXpathTool::new().serve(stdio()).await.unwrap();
+            service.waiting().await.unwrap();
+        }
+        Commands::XPathForRegex { file, regex } => {
+            run_xpath_for_regex(&file, &regex);
+        }
+        Commands::EvaluateXPath { file, xpath } => {
+            run_evaluate_xpath(&file, &xpath);
+        }
+        Commands::CssForRegex { file, regex } => {
+            run_css_for_regex(&file, &regex);
+        }
+        Commands::EvaluateCss { file, selector } => {
+            run_evaluate_css(&file, &selector);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -254,6 +324,142 @@ pub struct EvaluateCssSelectorResponse {
     pub file: String,
     pub selector: String,
     pub results: Vec<EvaluateXPathResult>,
+}
+
+fn run_xpath_for_regex(file: &str, regex: &str) {
+    let file_path = Path::new(file);
+    if !file_path.exists() {
+        eprintln!("Error: File not found: {file}");
+        std::process::exit(1);
+    }
+
+    let compiled_regex = match regex::Regex::new(regex) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: Invalid regex pattern: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let root = match parsing::parse_file(file_path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: Failed to parse file: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let matches = xpath::xpath_for_regex(&root, &compiled_regex);
+
+    let response = XPathForRegexResponse {
+        file: file.to_string(),
+        regex: regex.to_string(),
+        matches,
+    };
+
+    let json = serde_json::to_string_pretty(&response).unwrap();
+    println!("{json}");
+}
+
+fn run_evaluate_xpath(file: &str, xpath: &str) {
+    let file_path = Path::new(file);
+    if !file_path.exists() {
+        eprintln!("Error: File not found: {file}");
+        std::process::exit(1);
+    }
+
+    let root = match parsing::parse_file(file_path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: Failed to parse file: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let results = match xpath::evaluate_xpath(&root, xpath) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: Invalid XPath expression: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let response = EvaluateXPathResponse {
+        file: file.to_string(),
+        xpath: xpath.to_string(),
+        results,
+    };
+
+    let json = serde_json::to_string_pretty(&response).unwrap();
+    println!("{json}");
+}
+
+fn run_css_for_regex(file: &str, regex: &str) {
+    let file_path = Path::new(file);
+    if !file_path.exists() {
+        eprintln!("Error: File not found: {file}");
+        std::process::exit(1);
+    }
+
+    let compiled_regex = match regex::Regex::new(regex) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: Invalid regex pattern: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let root = match parsing::parse_file(file_path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: Failed to parse file: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let matches = css::css_selector_for_regex(&root, &compiled_regex);
+
+    let response = CssSelectorForRegexResponse {
+        file: file.to_string(),
+        regex: regex.to_string(),
+        matches,
+    };
+
+    let json = serde_json::to_string_pretty(&response).unwrap();
+    println!("{json}");
+}
+
+fn run_evaluate_css(file: &str, selector: &str) {
+    let file_path = Path::new(file);
+    if !file_path.exists() {
+        eprintln!("Error: File not found: {file}");
+        std::process::exit(1);
+    }
+
+    let root = match parsing::parse_file(file_path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: Failed to parse file: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let results = match css::evaluate_css_selector(&root, selector) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: Invalid CSS selector: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let response = EvaluateCssSelectorResponse {
+        file: file.to_string(),
+        selector: selector.to_string(),
+        results,
+    };
+
+    let json = serde_json::to_string_pretty(&response).unwrap();
+    println!("{json}");
 }
 
 #[tool_handler]
