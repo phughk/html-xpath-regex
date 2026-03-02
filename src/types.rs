@@ -42,6 +42,22 @@ pub struct XPathForRegexResponse {
     pub matches: Vec<XPathMatch>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct CssSelectorMatch {
+    pub selector: String,
+    pub matched_text: String,
+    pub regex_matches: Vec<String>,
+    /// Byte offsets from the beginning of the file for each regex match.
+    pub file_offsets: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CssSelectorForRegexResponse {
+    pub file: String,
+    pub regex: String,
+    pub matches: Vec<CssSelectorMatch>,
+}
+
 pub enum FileFormat {
     Html,
     Xml,

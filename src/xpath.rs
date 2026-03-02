@@ -25,18 +25,18 @@ pub fn xpath_for_regex(root: &SimpleNode, regex: &Regex) -> Vec<XPathMatch> {
         .collect()
 }
 
-struct DfsWalkResult {
-    path_indices: Vec<usize>,
-    matched_full_text: String,
-    regex_match_strings: Vec<String>,
-    source_offset: Option<usize>,
+pub(crate) struct DfsWalkResult {
+    pub path_indices: Vec<usize>,
+    pub matched_full_text: String,
+    pub regex_match_strings: Vec<String>,
+    pub source_offset: Option<usize>,
     /// Byte offsets of each regex match within the text node.
-    match_byte_offsets: Vec<usize>,
+    pub match_byte_offsets: Vec<usize>,
 }
 
 /// DFS walk to find text nodes matching the regex.
 /// Returns (path_indices, full_text, regex_match_strings) for each match.
-fn find_matches(
+pub(crate) fn find_matches(
     node: &SimpleNode,
     regex: &Regex,
     path: &mut Vec<usize>,
@@ -423,5 +423,51 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].text, "Three");
         assert!(results[0].file_offset.is_some());
+    }
+
+    #[test]
+    fn test_file_offsets_xml_integration() {
+        use std::io::Write;
+        let content = "<root><div>First</div><div>Second</div></root>";
+        let mut tmp = tempfile::Builder::new().suffix(".xml").tempfile().unwrap();
+        tmp.write_all(content.as_bytes()).unwrap();
+        tmp.flush().unwrap();
+
+        let tree = crate::parsing::parse_file(tmp.path()).unwrap();
+
+        // xpath_for_regex
+        let regex = Regex::new("Second").unwrap();
+        let matches = xpath_for_regex(&tree, &regex);
+        assert_eq!(matches.len(), 1);
+        // <root><div>First</div><div> = 27 bytes, then "Second" starts
+        assert_eq!(matches[0].file_offsets, vec![27]);
+
+        // evaluate_xpath
+        let results = evaluate_xpath(&tree, "/root/div[2]/text()").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].file_offset, Some(27));
+    }
+
+    #[test]
+    fn test_file_offsets_html_integration() {
+        use std::io::Write;
+        let content = "<html><body><p>Hello World</p></body></html>";
+        let mut tmp = tempfile::Builder::new().suffix(".html").tempfile().unwrap();
+        tmp.write_all(content.as_bytes()).unwrap();
+        tmp.flush().unwrap();
+
+        let tree = crate::parsing::parse_file(tmp.path()).unwrap();
+
+        // xpath_for_regex
+        let regex = Regex::new("Hello").unwrap();
+        let matches = xpath_for_regex(&tree, &regex);
+        assert_eq!(matches.len(), 1);
+        // <html><body><p> = 15 bytes, then "Hello World" starts
+        assert_eq!(matches[0].file_offsets, vec![15]);
+
+        // evaluate_xpath
+        let results = evaluate_xpath(&tree, "/html/body/p/text()").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].file_offset, Some(15));
     }
 }
